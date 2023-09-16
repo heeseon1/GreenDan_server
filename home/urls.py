@@ -13,5 +13,6 @@ urlpatterns = [
     path('pest/', AllPestAPIView.as_view()),
     path('history/<int:pk>/', HistoryAPIView.as_view()),
     path('history/', AllHistoryAPIView.as_view()),
+    path('search/', results, name='search_results'),
 ]
 urlpatterns += router.urls
