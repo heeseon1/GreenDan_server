@@ -1,14 +1,22 @@
+import io
 import os
 
 from django.core.files.base import ContentFile
 from django.shortcuts import get_object_or_404
+from django.views.decorators.csrf import csrf_exempt
+from django.core.files.storage import default_storage
+from django.core.files.uploadedfile import InMemoryUploadedFile
 from rest_framework import status
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from django.http import JsonResponse, HttpResponse
 import requests
+import tempfile
+import base64
 from PIL import Image
 
+from home.models import Blight
+from project.settings import MEDIA_ROOT, MEDIA_URL
 from .models import Photo
 from .serializers import NormalPhotoSerializer, ComplaintPhotoSerializer, EtcPhotoSerializer, AllPhotoSerializer
 
@@ -62,80 +70,112 @@ class AllPhotoAPIView(APIView):
         return Response(result, status=status.HTTP_200_OK)
 
 # 파일 확장자 구분
-ALLOWED_EXTENSIONS = ['png', 'jpg', 'jpeg']
+ALLOWED_EXTENSIONS = ['png', 'jpg', 'jpeg', 'heic']
+
 
 def file_extension(filename):
     return any(filename.endswith(ext) for ext in ALLOWED_EXTENSIONS)
 
+
+@csrf_exempt
 # Flask api로 요청 보내기
 def sendAI(request):
-    response = None
+    try:
+        if request.method == 'POST':
+            user_image = request.FILES.get('user_image')
+            email = request.POST.get('email')
 
-    if request.method == 'POST':
-        # 유저가 보내는 이미지
-        user_image_a = request.FILES.get('user_image_a')
-        user_image_b = request.FILES.get('user_image_b')
+            if file_extension(user_image.name):
+                save_image = photo_save(user_image)
+                with tempfile.NamedTemporaryFile(delete=False) as temp_file:
+                    for chunk in user_image.chunks():
+                        temp_file.write(chunk)
 
-        # AI가 보내는 이미지
-        ai_image_a = request.FILES.get('ai_image_a')
-        ai_image_b = request.FILES.get('ai_image_b')
+                file_name = user_image.name  # 파일 이름 유지
+                file_path = os.path.join(f'media/user_images/{str(file_name)}')
 
-        # 이메일
-        email = request.POST.get('email')
+                if save_image:
+                    ai_server = 'http://192.168.1.102:5000/detect'
 
-        # 유저와 ai가 보낸 이미지 구분
-        if user_image_a and ai_image_a:
-            photo_state = request.POST.get('photo_state')
-            if photo_state == 'GOOD':
-                if file_extension(user_image_a.name) and file_extension(ai_image_a.name):
-                    response = photo_save(photo_state, user_image_a, ai_image_a, email)
-            elif photo_state == 'BAD':
-                if file_extension(user_image_a.name) and file_extension(ai_image_a.name):
-                    response = photo_save(photo_state, user_image_a, ai_image_a, email)
-            elif photo_state =='ETC':
-                if file_extension(user_image_a.name) and file_extension(ai_image_a.name):
-                    response = photo_save(photo_state, user_image_a, ai_image_a, email)
+                    data = {'email': email}
+                    files = {'file': (file_name, open(file_path, 'rb'))}
+                    ai_image = requests.post(ai_server, data=data, files=files)  # ai 서버로 post
 
-            return HttpResponse(ai_image_a.read(), content_type='image/jpg')
+                    print(data, files) # 리액트가 보낸 요청 프린트
 
-        if user_image_b and ai_image_b:
-            photo_state = request.POST.get('photo_state')
-            if photo_state == 'GOOD':
-                if file_extension(user_image_b.name) and file_extension(ai_image_b.name):
-                    response = photo_save(photo_state, user_image_b, ai_image_b, email)
-            elif photo_state == 'BAD':
-                if file_extension(user_image_b.name) and file_extension(ai_image_b.name):
-                    response = photo_save(photo_state, user_image_b, ai_image_b, email)
-            elif photo_state == 'ETC':
-                if file_extension(user_image_b.name) and file_extension(ai_image_b.name):
-                    response = photo_save(photo_state, user_image_b, ai_image_b, email)
+                    if ai_image.status_code == 200: # ai 응답
+                        ai_data = ai_image.json()
+                        ai_result = ai_data.get('result', {}).get('ai_result', '')  # ai_result 값 추출
+                        ai_name = ai_data.get('result', {}).get('ai_name', '')
+                        ai_images = ai_data.get('result', {}).get('ai_images', '')
 
-            return HttpResponse(ai_image_b.read(), content_type='image/jpg')
+                        explain = ''
 
-        if response is not None:
-            return response
+                        if ai_result == 'GOOD':
+                            explain = '정상 사진입니다.'
+                        elif ai_result == 'ETC':
+                            explain = '기타 사진입니다.'
+                        else:
+                            try:
+                                blight = Blight.objects.get(name=ai_name)
+                                explain = blight.causation
+                            except Blight.DoesNotExist:
+                                explain = '정상 작물입니다.'
 
-        return HttpResponse('이미지 처리 중 오류가 발생했습니다.', status=500)
+                        if ai_images:
+                            ai_image_data = ai_images[0]
+                            try:
+                                image_data = base64.b64decode(ai_image_data)
+                                image = Image.open(io.BytesIO(image_data))
 
-    return HttpResponse('POST 메소드로만 요청이 가능합니다.', status=405)
+                                image_file = InMemoryUploadedFile(
+                                    io.BytesIO(image_data),
+                                    None,
+                                    str(file_name),
+                                    'image/jpeg',
+                                    len(image_data),
+                                    None
+                                )
 
-# 위에서 사용하는 photo_save함수
-def photo_save(photo_state, user_image, ai_image, email):
-    # flask api로 요청 전송
-    load = {'email':email}
-    files = {'user_image':user_image, 'ai_image':ai_image}
-    response = requests.post('http://127.0.0.1:5000/detect', data=load, files=files)
+                                image_path = os.path.join(MEDIA_ROOT, 'photos', str(file_name))
+                                with open(image_path, 'wb') as dest:
+                                    for chunk in image_file.chunks():
+                                        dest.write(chunk)
 
-    # 이미지 결과를 디비에 저장
-    image_result = Photo()
-    image_result.photo_state = photo_state
+                                photo = Photo(email=email, image=image_path, state=ai_result, name=ai_name, explain=explain)
+                                print(email, ai_result, ai_name)
+                                photo.save()
 
-    # 파일명 설정
-    if photo_state == 'GOOD':
-        filename = 'normal_image.jpg'
-    elif photo_state == 'BAD':
-        filename = 'complaint_image.jpg'
-    else:
-        filename = 'etc_image.jpg'
+                            except Exception as e:
+                                print(f'이미지 저장 중 예외 발생: {str(e)}')
+                                return HttpResponse('이미지 저장 중 예외 발생', status=500)
 
-    photo_save(filename, ContentFile(response.content), save=True)
+                        return HttpResponse(ai_image.content, content_type='application/json')
+                        print(ai_image.content)
+                    else:
+                        return HttpResponse('AI 서버 응답 에러', status=ai_image.status_code)
+                else:
+                    return HttpResponse('올바른 이미지 확장자가 아님', status=400)
+
+        return HttpResponse('POST 메소드만 요청 가능', status=405)
+
+    except Exception as e:
+        print(f'예외 발생 : {str(e)}')
+        return HttpResponse('서버에서 예외 발생', status=500)
+
+
+# 기존 코드에서 사용했던 photo_save함수
+def photo_save(image):
+    try:
+        image_save = 'media/user_images/'
+        os.makedirs(image_save, exist_ok=True)
+        filename = os.path.join(image_save, image.name)
+        with open(filename, 'wb') as f:
+            for chunk in image.chunks():
+                f.write(chunk)
+
+        return open(filename, 'rb')
+
+    except Exception as e:
+        print(f'이미지 저장 중 예외 발생: {str(e)}')
+        return HttpResponse('이미지 저장 중 예외 발생', status=500)

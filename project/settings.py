@@ -184,7 +184,7 @@ REST_FRAMEWORK = {
 }
 
 SIMPLE_JWT = {
-    'ACCESS_TOKEN_LIFETIME': timedelta(hours=2), # access token 만료기간
-    'REFRESH_TOKEN_LIFETIME': timedelta(days=7), # refresh token 만료기간
-    'ROTATE_REFRESH_TOKENS': False, # token 재발급 관련 설정
+    'ACCESS_TOKEN_LIFETIME': timedelta(days=100), # access token 만료기간
+    'REFRESH_TOKEN_LIFETIME': timedelta(days=100), # refresh token 만료기간
+    'ROTATE_REFRESH_TOKENS': True, # token 재발급 관련 설정
 }

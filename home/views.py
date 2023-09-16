@@ -1,9 +1,9 @@
+from rest_framework.decorators import action
 from rest_framework.filters import SearchFilter
 from rest_framework.generics import get_object_or_404
 from rest_framework import status, viewsets, generics
 from rest_framework.response import Response
 from rest_framework.views import APIView
-from rest_framework import filters
 from rest_framework.viewsets import ModelViewSet
 
 from .models import Blight, Pest, History
@@ -79,6 +79,7 @@ class AllHistoryAPIView(APIView):
         }
         return Response(result, status=status.HTTP_200_OK)
 
+
 # 히스토리 api 뷰 (상세)
 class HistoryAPIView(APIView):
     def get(self, request, pk):
@@ -90,3 +91,10 @@ class HistoryAPIView(APIView):
             "result": serializer.data
         }
         return Response(result, status=status.HTTP_200_OK)
+
+    def patch(self, request, pk=None):
+        history = get_object_or_404(History, id=pk)
+        history.bookmarked = not history.bookmarked
+        history.save()
+        serializer = HistorySerializer(history)
+        return Response(serializer.data)

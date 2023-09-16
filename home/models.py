@@ -1,6 +1,6 @@
 from django.db import models
 
-# Create your models here.
+
 # 자주 발병하는 병해
 class Blight(models.Model):
     name = models.CharField(max_length=20)
@@ -48,6 +48,7 @@ class History(models.Model):
     name = models.CharField(max_length=20)
     history_img = models.ImageField(upload_to='histories/%Y/%m/%d', default='default.png')
     causation = models.TextField()
+    bookmarked = models.BooleanField(default=False)
 
     created_at = models.DateTimeField('생성 일시', auto_now_add=True)
     updated_at = models.DateTimeField('수정 일시', auto_now=True)
@@ -59,3 +60,8 @@ class History(models.Model):
 
     def __str__(self):
         return self.name
+
+
+
+
+
